@@ -4,6 +4,8 @@ import open3d as o3d
 import os
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import argparse
+import json
 from shapely.geometry import Polygon
 from pyproj import Transformer, CRS
 
@@ -31,22 +33,22 @@ def read_las_file(file_path):
         raise ValueError("No spatial reference found in LAS file.")
     
     # Transform to EPSG:3857 (Web Mercator)
-    transformer = Transformer.from_crs(input_crs, "EPSG:3857", always_xy=True)
+    transformer = Transformer.from_crs(input_crs, "EPSG:4326", always_xy=True)
     transformed_coords = [transformer.transform(x, y) for x, y in bbox_polygon.exterior.coords]
-    bbox_polygon_3857 = Polygon(transformed_coords)
+    bbox_polygon_4326 = Polygon(transformed_coords)
     
-    return points, bbox_polygon_3857
+    return points, bbox_polygon_4326
 
-def save_bounding_box_as_gpkg(bbox_polygon, output_path):
-    """Saves the bounding box polygon as a GeoPackage file."""
-    gdf = gpd.GeoDataFrame(geometry=[bbox_polygon], crs="EPSG:3857")
+def save_bounding_box_as_geojson(bbox_polygon, output_path, metadata):
+    """Saves the bounding box polygon as a GeoJSON file, embedding metadata."""
+    gdf = gpd.GeoDataFrame([metadata], geometry=[bbox_polygon], crs="EPSG:3857")
     gdf.to_file(output_path, driver="GeoJSON")
 
-def render_views(points, output_dir, max_points=1e8, section_width=10):
+def render_views(points, output_dir, max_points, section_width, image_width, image_height):
     """Renders and saves 8 top-down views and 2 section views."""
     os.makedirs(output_dir, exist_ok=True)
     
-    # Compute bounding box center (now should be near (0,0,0))
+    # Compute bounding box center
     min_vals = points.min(axis=0)
     max_vals = points.max(axis=0)
     center = (min_vals + max_vals) / 2
@@ -69,7 +71,7 @@ def render_views(points, output_dir, max_points=1e8, section_width=10):
     pcd.colors = o3d.utility.Vector3dVector(colors)
     
     vis = o3d.visualization.Visualizer()
-    vis.create_window(visible=False)
+    vis.create_window(visible=False, width=image_width, height=image_height)
     vis.add_geometry(pcd)
     opt = vis.get_render_option()
     opt.point_size = 1.0  # Decrease point size
@@ -77,9 +79,9 @@ def render_views(points, output_dir, max_points=1e8, section_width=10):
     
     # Render top-down views from 8 angles
     for i, angle in enumerate(range(0, 360, 10)):
-        ctr.set_front([np.cos(np.radians(angle)), np.sin(np.radians(angle)), 0.5])  # Ensure Z-axis is pointing upwards
+        ctr.set_front([np.cos(np.radians(angle)), np.sin(np.radians(angle)), 0.5])
         ctr.set_lookat(center)
-        ctr.set_up([0, 0, 1])  # Up direction is strictly Z
+        ctr.set_up([0, 0, 1])
         vis.poll_events()
         vis.update_renderer()
         output_path = os.path.join(output_dir, f'top_view_{i:02d}.png')
@@ -109,11 +111,37 @@ def render_views(points, output_dir, max_points=1e8, section_width=10):
         vis.update_renderer()
         output_path = os.path.join(output_dir, f'section_{direction}.png')
         vis.capture_screen_image(output_path)
-    
+        
     vis.destroy_window()
 
-# Example usage:
-#points, polygon = read_las_file(r'E:\Ecosense\2024-10-15 ecosense.RiSCAN\EXPORTS\Export Point Clouds\2024-10-15 ecosense 0.020 m.las')
-points, polygon = read_las_file(r'E:\Ecosense\2024-10-15 ecosense.RiSCAN\EXPORTS\Export Point Clouds\circles\segmentation_circle_1.las')
-save_bounding_box_as_gpkg(polygon, r'E:\Ecosense\2024-10-15 ecosense.RiSCAN\EXPORTS\Export Point Clouds\render\bounding_box.geojson')
-render_views(points, r'E:\Ecosense\2024-10-15 ecosense.RiSCAN\EXPORTS\Export Point Clouds\render')
+def main():
+    parser = argparse.ArgumentParser(description="Render LiDAR point clouds with Open3D.")
+    parser.add_argument("input_file", type=str, help="Path to the input LAS file.")
+    parser.add_argument("output_folder", type=str, help="Path to the output directory.")
+    parser.add_argument("--max_points", type=int, default=int(1e8), help="Maximum number of points to render.")
+    parser.add_argument("--section_width", type=float, default=10, help="Width of section views in meters.")
+    parser.add_argument("--image_width", type=int, default=2048, help="Height of the output images in pixels.")
+    parser.add_argument("--image_height", type=int, default=1152, help="Width of the output images in pixels.")
+    
+    args = parser.parse_args()
+    
+    # Load LAS file and extract bounding box
+    points, bbox_polygon = read_las_file(args.input_file)
+    
+    # Save bounding box as GeoJSON with metadata
+    metadata = {
+        "input_file": args.input_file,
+        "output_folder": args.output_folder,
+        "max_points": args.max_points,
+        "section_width": args.section_width,
+        "image_width": args.image_width,
+        "image_height": args.image_height
+    }
+    bbox_path = os.path.join(args.output_folder, "bounding_box.geojson")
+    save_bounding_box_as_geojson(bbox_polygon, bbox_path, metadata)
+    
+    # Render views
+    render_views(points, args.output_folder, args.max_points, args.section_width, args.image_width, args.image_height)
+    
+if __name__ == "__main__":
+    main()
