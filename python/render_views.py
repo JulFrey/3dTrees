@@ -106,7 +106,7 @@ def render_views(points, output_dir, max_points, section_width, image_width, ima
         ctr.set_front(front)  # Set correct viewing direction
         ctr.set_lookat(center)
         ctr.set_up([0, 0, 1])  # Keep Z-axis as up
-        ctr.set_zoom(1)
+        ctr.set_zoom(0.5)
         vis.poll_events()
         vis.update_renderer()
         output_path = os.path.join(output_dir, f'section_{direction}.png')
