@@ -44,6 +44,19 @@ def save_bounding_box_as_geojson(bbox_polygon, output_path, metadata):
     gdf = gpd.GeoDataFrame([metadata], geometry=[bbox_polygon], crs="EPSG:3857")
     gdf.to_file(output_path, driver="GeoJSON")
 
+
+# function to remove outliers from the point cloud for the x,y,z coordinates    
+def remove_outliers(points, threshold=1.5):
+    """Removes outliers from the point cloud based on the IQR method."""
+    q1 = np.percentile(points, 25, axis=0, method = 'median_unbiased')
+    q3 = np.percentile(points, 75, axis=0, method = 'median_unbiased')
+    iqr = q3 - q1
+    lower_bound = q1 - threshold * iqr
+    upper_bound = q3 + threshold * iqr
+    mask = np.all((points >= lower_bound) & (points <= upper_bound), axis=1)
+    return points[mask]
+
+
 def render_views(points, output_dir, max_points, section_width, image_width, image_height):
     """Renders and saves 8 top-down views and 2 section views."""
     os.makedirs(output_dir, exist_ok=True)
@@ -51,7 +64,8 @@ def render_views(points, output_dir, max_points, section_width, image_width, ima
     # Compute bounding box center
     min_vals = points.min(axis=0)
     max_vals = points.max(axis=0)
-    center = (min_vals + max_vals) / 2
+    #center = (min_vals + max_vals) / 2
+    center = np.median(points, axis=0)
 
     # Generate mask for random downsampling
     if len(points) > max_points:
@@ -59,7 +73,7 @@ def render_views(points, output_dir, max_points, section_width, image_width, ima
     else:
         mask_random = np.arange(len(points))
     
-    sampled_points = points[mask_random]
+    sampled_points = remove_outliers(points[mask_random])
     
     # Convert to Open3D point cloud
     pcd = o3d.geometry.PointCloud()
@@ -82,7 +96,7 @@ def render_views(points, output_dir, max_points, section_width, image_width, ima
         ctr.set_front([np.cos(np.radians(angle)), np.sin(np.radians(angle)), 0.5])
         ctr.set_lookat(center)
         ctr.set_up([0, 0, 1])
-        ctr.set_zoom(0.5)
+        #ctr.set_zoom(0.5)
         vis.poll_events()
         vis.update_renderer()
         output_path = os.path.join(output_dir, f'top_view_{i:02d}.png')
@@ -117,24 +131,24 @@ def render_views(points, output_dir, max_points, section_width, image_width, ima
         center_coord = center[axis_index]
 
         # Initial mask using center-based slicing
-        mask = (points[:, axis_index] > center_coord - section_width / 2) & \
-               (points[:, axis_index] < center_coord + section_width / 2)
+        mask = (sampled_points[:, axis_index] > center_coord - section_width / 2) & \
+               (sampled_points[:, axis_index] < center_coord + section_width / 2)
 
         # If mask is empty, fall back to median coordinate
         if not np.any(mask):
-            median_coord = np.median(points[:, axis_index])
-            mask = (points[:, axis_index] > median_coord - section_width / 2) & \
-                   (points[:, axis_index] < median_coord + section_width / 2)
+            median_coord = np.median(sampled_points[:, axis_index])
+            mask = (sampled_points[:, axis_index] > median_coord - section_width / 2) & \
+                   (sampled_points[:, axis_index] < median_coord + section_width / 2)
             if not np.any(mask):
                 print(f"Skipping section view {direction} — no points in center or median slice.")
                 continue
             center_coord = median_coord  # Update lookat for visualization
 
-        section_points = points[mask]
+        section_points = sampled_points[mask]
         section_pcd = o3d.geometry.PointCloud()
         section_pcd.points = o3d.utility.Vector3dVector(section_points)
 
-        color_values = section_points[:, 1 - axis_index]  # Color along orthogonal axis
+        color_values = section_points[:, axis_index]  # Color along orthogonal axis
         colors = plt.get_cmap("viridis")(
             (color_values - color_values.min()) / (color_values.max() - color_values.min())
         )[:, :3]
@@ -145,7 +159,7 @@ def render_views(points, output_dir, max_points, section_width, image_width, ima
         ctr.set_front(front)
         ctr.set_lookat([center[0], center[1], center[2]])
         ctr.set_up([0, 0, 1])
-        ctr.set_zoom(0.5)
+        #ctr.set_zoom(0.5)
         vis.poll_events()
         vis.update_renderer()
         output_path = os.path.join(output_dir, f'section_{direction}.png')
